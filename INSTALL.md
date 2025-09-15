@@ -177,8 +177,7 @@ debug_mode = false
 ## 📚 相关文档
 
 - [README.md](README.md) - 插件详细介绍
-- [USAGE.md](USAGE.md) - 使用指南
-- [SUMMARY.md](SUMMARY.md) - 功能总结
+
 
 ## 🆘 获取帮助
 
@@ -193,7 +192,6 @@ debug_mode = false
 - [ ] 插件文件已放置在正确位置
 - [ ] 依赖包已安装 (feedparser, aiofiles)
 - [ ] 配置文件已正确设置
-- [ ] 测试脚本运行成功
 - [ ] MaiBot 重启后插件正常加载
 - [ ] 命令 `/topic_config` 显示正确信息
 - [ ] 命令 `/topic_test` 能生成话题
