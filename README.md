@@ -21,7 +21,7 @@
 - `logs/`：运行日志（忽略提交）。
 
 ## 安装
-请查看INSTALL.md
+请查看[INSTALL.md](https://github.com/CharTyr/Maibot_topic_finder_plugin/blob/main/INSTALL.md)
 
 ## 配置（`topic_finder_plugin/config.toml`）
 ```toml
