@@ -1,0 +1,124 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[schedule]
+# 每日发送话题的时间点（24小时制），可配置多个时间
+daily_times = ["09:00", "14:00", "20:00"]
+# 是否启用定时发送
+enable_daily_schedule = true
+# 话题发送间隔（小时），避免过于频繁
+min_interval_hours = 2
+
+[silence_detection]
+# 是否启用群聊静默检测
+enable_silence_detection = true
+# 群聊静默时间阈值（分钟），超过此时间无消息则发起话题
+silence_threshold_minutes = 60
+# 检查间隔（分钟）
+check_interval_minutes = 10
+# 静默检测的活跃时间段（避免深夜发送）
+active_hours_start = 8
+active_hours_end = 23
+
+[rss]
+# 是否启用RSS
+enable_rss = true
+# RSS订阅源列表
+sources = [
+    "https://www.ithome.com/rss/",
+]
+# RSS更新间隔（分钟）
+update_interval_minutes = 30
+# RSS内容缓存时间（小时）
+cache_hours = 6
+# 每次获取的最大条目数
+max_items_per_source = 20
+
+[topic_generation]
+# 话题生成的prompt模板（优化：更贴合人设且更具吸引力）
+topic_prompt = """
+{persona}
+基于下列资讯生成一条能抓住注意力的中文话题钩子：
+- 仅输出一句话，不要解释/前后缀/引号/标签/链接
+- 26~40 字，包含一个核心名词或趋势词
+- 语气克制、轻挑，避免冒犯与敏感内容
+
+资讯：
+{rss_content}
+
+输出：
+"""
+combine_strategy = "merge"  # merge | prefer_rss | prefer_web
+
+# 备用话题列表（当RSS获取失败时使用）
+fallback_topics = [
+    "不说话是吧",
+]
+
+# 话题类型权重（影响生成的话题倾向）
+[topic_weights]
+technology = 0.3
+entertainment = 0.2
+lifestyle = 0.2
+current_events = 0.2
+random = 0.1
+
+[filtering]
+# 目标群聊列表（为空则对所有群聊生效）
+target_groups = [902106123]
+# 排除的群聊列表
+exclude_groups = []
+# 是否只在群聊中发送（不在私聊中发送）
+group_only = true
+
+[advanced]
+# 是否启用智能时机检测（分析群聊活跃度）
+enable_smart_timing = true
+# 最大重试次数（RSS获取失败时）
+max_retry_attempts = 3
+# 调试模式
+debug_mode = false
+# 近N小时内避免重复话题
+recent_topics_window_hours = 48
+# 每群聊最多保留的最近话题数量
+recent_topics_max_items = 50
+
+[web_llm]
+# 联网大模型配置
+enable_web_llm = true
+base_url = "<YOUR__LLM_API_URL>"
+api_key = "<YOUR__LLM_API_KEY>"
+model_name = "sonar"
+temperature = 0.8
+max_tokens = 5000
+timeout_seconds = 30
+# 提示：可使用环境变量覆盖以上两项
+# WEB_LLM_BASE_URL / WEB_LLM_API_KEY 具有更高优先级
+
+# 联网信息获取prompt
+web_info_prompt = """今天是{current_date}，请帮我获取当前最新的热门话题和新闻信息，重点关注：
+1. 科技数码领域的最新动态
+2. 游戏社区文化热点趋势
+3. 社会热点和趋势话题
+4. 娱乐文化相关内容
+
+请提供3-5个最新的热点信息（优先获取今天或近几天的信息），每个信息包含标题和简短描述。
+格式如下：
+标题：[标题内容]
+描述：[简短描述]
+
+---"""
+
+# 联网信息更新间隔（分钟）
+web_info_update_interval = 60
+# 联网信息缓存时间（小时）
+web_info_cache_hours = 2
+
+# 群聊覆盖配置：可为不同群设置活跃时段与静默阈值
+[group_overrides]
+  # 示例：为群 902106123 设置专属活跃时段与静默阈值
+  [group_overrides."902106123"]
+  active_hours_start = 9
+  active_hours_end = 22
+  silence_threshold_minutes = 45

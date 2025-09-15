@@ -1,0 +1,71 @@
+{
+  "manifest_version": 1,
+  "name": "麦麦找话题插件 (Topic Finder Plugin)",
+  "version": "1.1.0",
+  "description": "通过RSS订阅与联网模型获取信息，可单独或同时启用；在固定时间或群聊静默时自动发起话题讨论",
+  "author": {
+    "name": "CharTyr",
+    "url": "https://github.com/CharTyr"
+  },
+  "license": "GPL-v3.0-or-later",
+  
+  "host_application": {
+    "min_version": "0.8.0"
+  },
+  "homepage_url": "https://github.com/CharTyr/MaiBot_topic_finder_plugin",
+  "repository_url": "https://github.com/CharTyr/MaiBot_topic_finder_plugin",
+  "keywords": ["topic", "rss", "chat", "automation", "discussion"],
+  "categories": ["Chat Enhancement", "Automation"],
+  
+  "default_locale": "zh-CN",
+  "locales_path": "_locales",
+  
+  "plugin_info": {
+    "is_built_in": false,
+    "plugin_type": "enhancement",
+    "components": [
+      {
+        "type": "event_handler",
+        "name": "topic_scheduler",
+        "description": "定时话题调度器，负责在固定时间发起话题"
+      },
+      {
+        "type": "event_handler", 
+        "name": "chat_silence_detector",
+        "description": "群聊静默检测器，检测群聊长时间无消息时发起话题"
+      },
+      {
+        "type": "action",
+        "name": "start_topic",
+        "description": "发起话题讨论的动作"
+      },
+      {
+        "type": "command",
+        "name": "topic_test",
+        "description": "测试话题生成功能",
+        "pattern": "/topic_test"
+      },
+      {
+        "type": "command",
+        "name": "topic_config",
+        "description": "查看话题插件配置",
+        "pattern": "/topic_config"
+      },
+      {
+        "type": "command",
+        "name": "topic_debug",
+        "description": "立即生成并发起话题（调试用）",
+        "pattern": "/topic_debug"
+      }
+    ],
+    "features": [
+      "RSS订阅话题源",
+      "联网大模型话题源",
+      "定时自动发起话题",
+      "群聊静默检测",
+      "智能话题生成",
+      "可配置时间和频率",
+      "多种话题来源支持"
+    ]
+  }
+}
