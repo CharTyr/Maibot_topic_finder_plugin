@@ -553,7 +553,9 @@ class TopicSchedulerEventHandler(BaseEventHandler):
         super().__init__()
         self.plugin_instance = None
 
-    async def execute(self, message: MaiMessages | None) -> Tuple[bool, bool, Optional[str], Optional[CustomEventHandlerResult]]:
+    async def execute(
+        self, message: MaiMessages | None
+    ) -> Tuple[bool, bool, Optional[str], Optional[CustomEventHandlerResult], Optional[MaiMessages]]:
         """启动定时任务"""
         try:
             # 获取插件实例
@@ -562,23 +564,23 @@ class TopicSchedulerEventHandler(BaseEventHandler):
 
             if not self.plugin_instance:
                 logger.error("无法获取话题插件实例")
-                return False, True, None, None
+                return False, True, None, None, None
 
             # 检查是否启用
             if not self.get_config("plugin.enabled", False):
                 logger.info("话题插件未启用")
-                return True, True, None, None
+                return True, True, None, None, None
 
             # 启动定时任务
             task = TopicSchedulerTask(self.plugin_instance)
             await async_task_manager.add_task(task)
 
             logger.info("话题调度任务已启动")
-            return True, True, None, None
+            return True, True, None, None, None
 
         except Exception as e:
             logger.error(f"启动话题调度任务失败: {e}")
-            return False, True, None, None
+            return False, True, None, None, None
 
 
 class ChatSilenceDetectorEventHandler(BaseEventHandler):
@@ -616,15 +618,17 @@ class ChatSilenceDetectorEventHandler(BaseEventHandler):
         except Exception:
             return True
 
-    async def execute(self, message: MaiMessages | None) -> Tuple[bool, bool, Optional[str], Optional[CustomEventHandlerResult]]:
+    async def execute(
+        self, message: MaiMessages | None
+    ) -> Tuple[bool, bool, Optional[str], Optional[CustomEventHandlerResult], Optional[MaiMessages]]:
         """检测群聊静默"""
         try:
             if not message:
-                return True, True, None, None
+                return True, True, None, None, None
 
             # 检查是否启用静默检测
             if not self.get_config("silence_detection.enable_silence_detection", False):
-                return True, True, None, None
+                return True, True, None, None, None
 
             # 安全地获取消息信息
             msg = None
@@ -641,11 +645,11 @@ class ChatSilenceDetectorEventHandler(BaseEventHandler):
                 is_group = getattr(message, 'is_group', False)
 
             if not chat_id:
-                return True, True, None, None
+                return True, True, None, None, None
 
             # 只处理群聊
             if not is_group:
-                return True, True, None, None
+                return True, True, None, None, None
 
             # 检查是否在活跃时间段（支持群聊覆盖）
             current_hour = datetime.now().hour
@@ -654,7 +658,7 @@ class ChatSilenceDetectorEventHandler(BaseEventHandler):
             active_end = override.get("active_hours_end", self.get_config("silence_detection.active_hours_end", 23))
 
             if not self._in_active_window(current_hour, active_start, active_end):
-                return True, True, None, None
+                return True, True, None, None, None
 
             # 检查间隔控制
             check_interval = self.get_config("silence_detection.check_interval_minutes", 10) * 60
@@ -662,18 +666,18 @@ class ChatSilenceDetectorEventHandler(BaseEventHandler):
 
             if chat_id in self.last_check_time:
                 if current_time - self.last_check_time[chat_id] < check_interval:
-                    return True, True, None, None
+                    return True, True, None, None, None
 
             self.last_check_time[chat_id] = current_time
 
             # 检查群聊静默时间
             await self._check_chat_silence(chat_id)
 
-            return True, True, None, None
+            return True, True, None, None, None
 
         except Exception as e:
             logger.error(f"群聊静默检测失败: {e}")
-            return True, True, None, None
+            return True, True, None, None, None
 
     async def _check_chat_silence(self, chat_id: str):
         """检查特定群聊的静默状态"""

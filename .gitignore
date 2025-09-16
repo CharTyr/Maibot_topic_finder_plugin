@@ -1,4 +1,8 @@
 __pycache__/
 logs/
 data/
+.env
+config.toml
+config.local.toml
+.config.toml.backup*
 .DS_Store
