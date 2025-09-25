@@ -49,6 +49,7 @@ from src.plugin_system.apis import (
     send_api, message_api, chat_api, llm_api
 )
 from src.manager.async_task_manager import AsyncTask, async_task_manager
+from src.chat.message_receive.chat_stream import get_chat_manager
 
 logger = get_logger("topic_finder_plugin")
 
@@ -1128,7 +1129,7 @@ class TopicFinderPlugin(BasePlugin):
             # 获取所有群聊
             if not target_groups:
                 # 如果没有指定目标群聊，获取所有群聊
-                all_streams = chat_api.get_all_group_streams() if group_only else chat_api.get_all_streams()
+                all_streams = chat_api.get_group_streams() if group_only else chat_api.get_all_streams()
                 target_chats = [stream.stream_id for stream in all_streams]
             else:
                 target_chats = target_groups
@@ -1188,9 +1189,22 @@ class TopicFinderPlugin(BasePlugin):
                 return
 
             # 发送话题
-            await send_api.send_text(
-                chat_id=chat_id,
-                text=topic_content
+            stream_id = str(chat_id)
+            stream = get_chat_manager().get_stream(stream_id)
+            if not stream:
+                stream_obj = chat_api.get_stream_by_group_id(str(chat_id))
+                if not stream_obj:
+                    stream_obj = chat_api.get_stream_by_user_id(str(chat_id))
+                if not stream_obj:
+                    logger.error(f"发送话题到群聊失败: 未找到聊天流 {chat_id}")
+                    return
+                stream_id = stream_obj.stream_id
+
+            await send_api.text_to_stream(
+                text=topic_content,
+                stream_id=stream_id,
+                typing=False,
+                storage_message=True,
             )
 
             # 记录发送时间
