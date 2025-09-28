@@ -190,14 +190,14 @@ class WebLLMManager:
         # 确保数据目录存在
         (plugin_dir / "data").mkdir(exist_ok=True)
 
-    async def get_web_info(self) -> List[Dict[str, Any]]:
+    async def get_web_info(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """获取联网信息"""
         if not self.config.get("web_llm", {}).get("enable_web_llm", False):
             logger.debug("联网大模型功能未启用")
             return []
 
-        # 检查是否需要更新
-        if not await self.should_update():
+        # 检查是否需要更新（除非强制刷新）
+        if not force_refresh and not await self.should_update():
             # 返回缓存的信息
             return await self.get_cached_info()
 
@@ -208,7 +208,7 @@ class WebLLMManager:
                 return await self.get_cached_info()
 
             # 调用联网大模型获取信息
-            web_info = await self._fetch_web_info()
+            web_info = await self._fetch_web_info(force_refresh=force_refresh)
 
             # 保存到缓存
             await self._save_cache(web_info)
@@ -268,7 +268,7 @@ class WebLLMManager:
             logger.warning(f"API可用性检查异常: {e}")
             return False
 
-    async def _fetch_web_info(self) -> List[Dict[str, Any]]:
+    async def _fetch_web_info(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """调用联网大模型获取信息"""
         if not aiohttp:
             logger.warning("aiohttp未安装，无法调用联网大模型")
@@ -280,18 +280,39 @@ class WebLLMManager:
         base_url = os.getenv("WEB_LLM_BASE_URL") or web_config.get("base_url", "")
         api_key = os.getenv("WEB_LLM_API_KEY") or web_config.get("api_key", "")
         model_name = web_config.get("model_name", "gpt-3.5-turbo")
-        temperature = web_config.get("temperature", 0.8)
+        # 如果是强制刷新（测试），使用更高的温度值增加随机性
+        base_temperature = web_config.get("temperature", 0.8)
+        temperature = min(1.0, base_temperature + 0.2) if force_refresh else base_temperature
         max_tokens = web_config.get("max_tokens", 500)
         timeout = web_config.get("timeout_seconds", 30)
         prompt_template = web_config.get("web_info_prompt", "请提供最新的热点信息")
 
-        # 插入当前日期
+        # 插入当前日期和时间，增加随机性
         from datetime import datetime
+        import random
         current_date = datetime.now().strftime("%Y年%m月%d日")
+        current_time = datetime.now().strftime("%H:%M")
+
+        # 为所有模式添加适度随机性
+        random_suffix = ""
+        if force_refresh:
+            # 测试模式：添加明确的随机话题关注
+            random_topics = ["科技", "娱乐", "体育", "财经", "社会", "国际", "文化", "健康"]
+            random_suffix = f"，特别关注{random.choice(random_topics)}相关内容"
+        else:
+            # 正常模式：添加轻微的时间戳随机性
+            time_variations = ["", "目前", "当前", "现在", "此时"]
+            time_suffix = random.choice(time_variations)
+            if time_suffix:
+                random_suffix = f"（{time_suffix}情况）"
+
         try:
-            prompt = prompt_template.format(current_date=current_date)
+            prompt = prompt_template.format(
+                current_date=current_date,
+                current_time=current_time
+            ) + random_suffix
         except KeyError:
-            prompt = prompt_template
+            prompt = prompt_template + f"（{current_date} {current_time}）" + random_suffix
 
         if not base_url or not api_key or api_key == "your-api-key-here":
             logger.warning("联网大模型配置不完整，跳过调用。请检查 base_url 和 api_key 配置")
@@ -641,7 +662,7 @@ class WebLLMManager:
                     data = json.loads(content)
 
             last_update = data.get("last_update", 0)
-            update_interval = self.config.get("web_llm", {}).get("web_info_update_interval", 60) * 60
+            update_interval = self.config.get("web_llm", {}).get("web_info_update_interval", 20) * 60
             current_time = time.time()
 
             # 防止时间戳错误导致的问题：如果last_update是未来时间，强制更新
@@ -651,6 +672,14 @@ class WebLLMManager:
 
             time_diff = current_time - last_update
             should_update = time_diff > update_interval
+
+            # 添加智能更新策略：如果距离上次更新时间较短但已有一定时间，增加随机概率更新
+            if not should_update and time_diff > update_interval * 0.7:
+                import random
+                # 30%的概率进行早期更新，避免内容过于固定
+                if random.random() < 0.3:
+                    logger.debug(f"智能更新策略触发: 随机早期更新")
+                    should_update = True
 
             logger.debug(f"联网信息更新检查: 上次更新={last_update}, 当前时间={current_time}, "
                         f"间隔={time_diff}s, 阈值={update_interval}s, 需要更新={should_update}")
@@ -1288,12 +1317,12 @@ class WebInfoTestCommand(BaseCommand):
 
             await self.send_text("🔄 正在获取联网信息...")
 
-            # 获取联网信息
+            # 获取联网信息（强制刷新以获取最新内容）
             if not plugin_instance.web_llm_manager:
                 await self.send_text("❌ 联网大模型管理器未初始化")
                 return False, "联网大模型管理器未初始化", False
 
-            web_info = await plugin_instance.web_llm_manager.get_web_info()
+            web_info = await plugin_instance.web_llm_manager.get_web_info(force_refresh=True)
 
             if not web_info:
                 # 提供更详细的错误信息
@@ -1395,7 +1424,7 @@ class TopicFinderPlugin(BasePlugin):
             "max_tokens": ConfigField(int, default=500, description="联网大模型最大token数"),
             "timeout_seconds": ConfigField(int, default=30, description="联网大模型请求超时时间"),
             "web_info_prompt": ConfigField(str, default="", description="联网信息获取prompt"),
-            "web_info_update_interval": ConfigField(int, default=60, description="联网信息更新间隔（分钟）"),
+            "web_info_update_interval": ConfigField(int, default=20, description="联网信息更新间隔（分钟）"),
             "web_info_cache_hours": ConfigField(int, default=2, description="联网信息缓存时间（小时）"),
         },
         "advanced": {
