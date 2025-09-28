@@ -202,6 +202,11 @@ class WebLLMManager:
             return await self.get_cached_info()
 
         try:
+            # 首先检查API可用性
+            if not await self._check_api_availability():
+                logger.warning("联网大模型API不可用，返回缓存信息")
+                return await self.get_cached_info()
+
             # 调用联网大模型获取信息
             web_info = await self._fetch_web_info()
 
@@ -216,6 +221,52 @@ class WebLLMManager:
             logger.error(f"联网信息获取失败: {e}")
             # 返回缓存的信息作为降级
             return await self.get_cached_info()
+
+    async def _check_api_availability(self) -> bool:
+        """检查API可用性"""
+        if not aiohttp:
+            logger.warning("aiohttp未安装，无法检查API可用性")
+            return False
+
+        web_config = self.config.get("web_llm", {})
+        import os
+        base_url = os.getenv("WEB_LLM_BASE_URL") or web_config.get("base_url", "")
+        api_key = os.getenv("WEB_LLM_API_KEY") or web_config.get("api_key", "")
+
+        if not base_url or not api_key or api_key == "your-api-key-here":
+            logger.warning("联网大模型配置不完整")
+            return False
+
+        base_url = base_url.rstrip('/')
+
+        try:
+            # 尝试简单的连接测试
+            timeout = aiohttp.ClientTimeout(total=10)  # 较短的超时时间用于快速检测
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                # 先尝试基础URL的连接
+                test_url = f"{base_url}/models"  # 通常OpenAI兼容的API都有这个端点
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+
+                async with session.get(test_url, headers=headers) as response:
+                    if response.status in [200, 401, 403]:  # 200成功，401/403表示连接成功但认证问题
+                        logger.debug(f"API连接测试成功，状态码: {response.status}")
+                        return True
+                    else:
+                        logger.warning(f"API连接测试失败，状态码: {response.status}")
+                        return False
+
+        except aiohttp.ClientConnectorError as e:
+            logger.warning(f"API连接失败: 无法连接到 {base_url}")
+            return False
+        except aiohttp.ClientTimeout as e:
+            logger.warning(f"API连接超时: {base_url}")
+            return False
+        except Exception as e:
+            logger.warning(f"API可用性检查异常: {e}")
+            return False
 
     async def _fetch_web_info(self) -> List[Dict[str, Any]]:
         """调用联网大模型获取信息"""
@@ -237,11 +288,21 @@ class WebLLMManager:
         # 插入当前日期
         from datetime import datetime
         current_date = datetime.now().strftime("%Y年%m月%d日")
-        prompt = prompt_template.format(current_date=current_date)
+        try:
+            prompt = prompt_template.format(current_date=current_date)
+        except KeyError:
+            prompt = prompt_template
 
         if not base_url or not api_key or api_key == "your-api-key-here":
-            logger.warning("联网大模型配置不完整，跳过调用")
+            logger.warning("联网大模型配置不完整，跳过调用。请检查 base_url 和 api_key 配置")
             return []
+
+        # 清理URL，确保格式正确
+        base_url = base_url.rstrip('/')
+        api_url = f"{base_url}/chat/completions"
+
+        logger.debug(f"尝试调用联网大模型API: {api_url}")
+        logger.debug(f"使用模型: {model_name}")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -258,55 +319,239 @@ class WebLLMManager:
         }
 
         try:
+            # 首先测试网络连接
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
-                async with session.post(f"{base_url}/chat/completions", headers=headers, json=data) as response:
+                logger.debug("开始发送API请求...")
+                async with session.post(api_url, headers=headers, json=data) as response:
+                    logger.debug(f"API响应状态码: {response.status}")
+
                     if response.status == 200:
                         result = await response.json()
+                        logger.debug(f"API响应内容: {result}")
+
                         content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        logger.debug(f"提取的内容: {content[:200]}...")
 
                         # 解析返回的内容
-                        return self._parse_web_info(content)
+                        parsed_info = self._parse_web_info(content)
+                        logger.info(f"成功解析联网信息，获得 {len(parsed_info)} 条信息")
+                        return parsed_info
                     else:
+                        # 读取错误响应内容
+                        error_text = await response.text()
                         logger.error(f"联网大模型调用失败，状态码: {response.status}")
+                        logger.error(f"错误响应: {error_text}")
                         return []
 
+        except aiohttp.ClientConnectorError as e:
+            logger.error(f"联网大模型连接失败: 无法连接到 {base_url}，请检查网络连接和URL配置")
+            logger.error(f"连接错误详情: {e}")
+            return []
+        except aiohttp.ClientTimeout as e:
+            logger.error(f"联网大模型请求超时: {timeout}秒，请检查网络连接或增加超时时间")
+            return []
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"联网大模型HTTP错误: {e.status} - {e.message}")
+            return []
         except Exception as e:
-            logger.error(f"联网大模型调用异常: {e}")
+            logger.error(f"联网大模型调用异常: {type(e).__name__}: {e}")
             return []
 
     def _parse_web_info(self, content: str) -> List[Dict[str, Any]]:
-        """解析联网大模型返回的信息"""
+        """解析联网大模型返回的信息，支持多种格式"""
         info_list = []
         current_time = time.time()
 
         try:
-            # 按行分割内容
-            lines = content.strip().split('\n')
-            current_item = {}
+            if not content or not content.strip():
+                logger.warning("联网大模型返回了空内容")
+                return []
 
-            for line in lines:
-                line = line.strip()
-                if not line or line == "---":
-                    if current_item.get("title") and current_item.get("description"):
-                        current_item["timestamp"] = current_time
-                        current_item["source"] = "web_llm"
-                        info_list.append(current_item)
-                        current_item = {}
-                    continue
+            logger.debug(f"开始解析联网信息，原始内容长度: {len(content)}")
 
-                if line.startswith("标题：") or line.startswith("标题:"):
-                    current_item["title"] = line.replace("标题：", "").replace("标题:", "").strip()
-                elif line.startswith("描述：") or line.startswith("描述:"):
-                    current_item["description"] = line.replace("描述：", "").replace("描述:", "").strip()
+            # 尝试多种解析方式
 
-            # 处理最后一个项目
-            if current_item.get("title") and current_item.get("description"):
-                current_item["timestamp"] = current_time
-                current_item["source"] = "web_llm"
-                info_list.append(current_item)
+            # 方式1: 结构化格式（标题：xxx, 描述：xxx）
+            parsed_items = self._parse_structured_format(content, current_time)
+            if parsed_items:
+                info_list.extend(parsed_items)
+                logger.debug(f"结构化格式解析成功，获得 {len(parsed_items)} 条信息")
+
+            # 方式2: JSON格式
+            if not info_list:
+                parsed_items = self._parse_json_format(content, current_time)
+                if parsed_items:
+                    info_list.extend(parsed_items)
+                    logger.debug(f"JSON格式解析成功，获得 {len(parsed_items)} 条信息")
+
+            # 方式3: 自由文本格式（按段落分割）
+            if not info_list:
+                parsed_items = self._parse_free_text_format(content, current_time)
+                if parsed_items:
+                    info_list.extend(parsed_items)
+                    logger.debug(f"自由文本格式解析成功，获得 {len(parsed_items)} 条信息")
+
+            # 方式4: 列表格式（1. 2. 3. 或 - 开头）
+            if not info_list:
+                parsed_items = self._parse_list_format(content, current_time)
+                if parsed_items:
+                    info_list.extend(parsed_items)
+                    logger.debug(f"列表格式解析成功，获得 {len(parsed_items)} 条信息")
+
+            logger.info(f"联网信息解析完成，总共获得 {len(info_list)} 条信息")
+            return info_list
 
         except Exception as e:
             logger.error(f"解析联网信息失败: {e}")
+            # 如果所有解析都失败，尝试将整个内容作为一条信息
+            if content.strip():
+                return [{
+                    "title": "联网信息",
+                    "description": content.strip()[:200],
+                    "timestamp": current_time,
+                    "source": "web_llm"
+                }]
+            return []
+
+    def _parse_structured_format(self, content: str, current_time: float) -> List[Dict[str, Any]]:
+        """解析结构化格式（标题：xxx, 描述：xxx）"""
+        info_list = []
+        lines = content.strip().split('\n')
+        current_item = {}
+
+        for line in lines:
+            line = line.strip()
+            if not line or line == "---":
+                if current_item.get("title") and current_item.get("description"):
+                    current_item["timestamp"] = current_time
+                    current_item["source"] = "web_llm"
+                    info_list.append(current_item)
+                    current_item = {}
+                continue
+
+            # 支持多种标题格式
+            title_prefixes = ["标题：", "标题:", "Title:", "title:", "主题：", "主题:", "话题：", "话题:"]
+            desc_prefixes = ["描述：", "描述:", "Description:", "description:", "内容：", "内容:", "详情：", "详情:"]
+
+            found_title = False
+            for prefix in title_prefixes:
+                if line.startswith(prefix):
+                    current_item["title"] = line.replace(prefix, "").strip()
+                    found_title = True
+                    break
+
+            if not found_title:
+                for prefix in desc_prefixes:
+                    if line.startswith(prefix):
+                        current_item["description"] = line.replace(prefix, "").strip()
+                        break
+
+        # 处理最后一个项目
+        if current_item.get("title") and current_item.get("description"):
+            current_item["timestamp"] = current_time
+            current_item["source"] = "web_llm"
+            info_list.append(current_item)
+
+        return info_list
+
+    def _parse_json_format(self, content: str, current_time: float) -> List[Dict[str, Any]]:
+        """解析JSON格式"""
+        try:
+            import json
+            # 尝试解析为JSON
+            data = json.loads(content.strip())
+            info_list = []
+
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        title = item.get("title") or item.get("标题") or item.get("topic") or ""
+                        description = item.get("description") or item.get("描述") or item.get("content") or ""
+                        if title or description:
+                            info_list.append({
+                                "title": title or "无标题",
+                                "description": description or title,
+                                "timestamp": current_time,
+                                "source": "web_llm"
+                            })
+            elif isinstance(data, dict):
+                title = data.get("title") or data.get("标题") or data.get("topic") or ""
+                description = data.get("description") or data.get("描述") or data.get("content") or ""
+                if title or description:
+                    info_list.append({
+                        "title": title or "无标题",
+                        "description": description or title,
+                        "timestamp": current_time,
+                        "source": "web_llm"
+                    })
+
+            return info_list
+        except:
+            return []
+
+    def _parse_free_text_format(self, content: str, current_time: float) -> List[Dict[str, Any]]:
+        """解析自由文本格式（按段落分割）"""
+        info_list = []
+        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+
+        for para in paragraphs:
+            if len(para) > 10:  # 过滤太短的段落
+                # 尝试提取标题（第一行或第一句）
+                lines = para.split('\n')
+                if len(lines) > 1:
+                    title = lines[0].strip()
+                    description = '\n'.join(lines[1:]).strip()
+                else:
+                    # 如果只有一行，尝试按句号分割
+                    sentences = para.split('。')
+                    if len(sentences) > 1:
+                        title = sentences[0].strip() + '。'
+                        description = '。'.join(sentences[1:]).strip()
+                    else:
+                        title = para[:30] + "..." if len(para) > 30 else para
+                        description = para
+
+                info_list.append({
+                    "title": title,
+                    "description": description,
+                    "timestamp": current_time,
+                    "source": "web_llm"
+                })
+
+        return info_list
+
+    def _parse_list_format(self, content: str, current_time: float) -> List[Dict[str, Any]]:
+        """解析列表格式（1. 2. 3. 或 - 开头）"""
+        info_list = []
+        lines = content.strip().split('\n')
+
+        import re
+        for line in lines:
+            line = line.strip()
+            # 匹配列表项：1. 、2. 、- 、* 、• 等
+            if re.match(r'^[\d]+\.|\-|\*|•', line):
+                # 移除列表标记
+                clean_line = re.sub(r'^[\d]+\.|\-|\*|•', '', line).strip()
+                if len(clean_line) > 5:  # 过滤太短的内容
+                    # 如果包含冒号，尝试分割为标题和描述
+                    if '：' in clean_line or ':' in clean_line:
+                        parts = re.split('[：:]', clean_line, 1)
+                        if len(parts) == 2:
+                            title = parts[0].strip()
+                            description = parts[1].strip()
+                        else:
+                            title = clean_line[:30] + "..." if len(clean_line) > 30 else clean_line
+                            description = clean_line
+                    else:
+                        title = clean_line[:30] + "..." if len(clean_line) > 30 else clean_line
+                        description = clean_line
+
+                    info_list.append({
+                        "title": title,
+                        "description": description,
+                        "timestamp": current_time,
+                        "source": "web_llm"
+                    })
 
         return info_list
 
@@ -916,6 +1161,83 @@ class TopicDebugCommand(BaseCommand):
             return False, f"调试话题生成失败: {str(e)}", False
 
 
+class WebApiTestCommand(BaseCommand):
+    """测试联网API连接命令"""
+
+    command_name = "web_api_test"
+    command_description = "测试联网大模型API连接状态"
+    command_usage = "/web_api_test - 测试API连接"
+    command_pattern = r"^/web_api_test$"
+
+    async def execute(self, **kwargs) -> Tuple[bool, str, bool]:
+        """执行API连接测试命令"""
+        try:
+            # 获取插件实例
+            from src.plugin_system.core.plugin_manager import plugin_manager
+            plugin_instance = plugin_manager.get_plugin_instance("topic_finder_plugin")
+
+            if not plugin_instance:
+                await self.send_text("❌ 无法获取话题插件实例")
+                return False, "插件实例获取失败", False
+
+            # 检查联网大模型是否启用
+            if not plugin_instance.get_config("web_llm.enable_web_llm", False):
+                await self.send_text("❌ 联网大模型功能未启用\n请在 config.toml 中设置 enable_web_llm = true")
+                return False, "联网大模型功能未启用", False
+
+            await self.send_text("🔄 正在测试API连接...")
+
+            # 测试API可用性
+            if not plugin_instance.web_llm_manager:
+                await self.send_text("❌ 联网大模型管理器未初始化")
+                return False, "联网大模型管理器未初始化", False
+
+            is_available = await plugin_instance.web_llm_manager._check_api_availability()
+
+            if is_available:
+                web_config = plugin_instance.config.get("web_llm", {})
+                base_url = web_config.get("base_url", "")
+                model_name = web_config.get("model_name", "")
+
+                response = f"✅ API连接测试成功！\n\n"
+                response += f"🔗 API地址: {base_url}\n"
+                response += f"🤖 模型名称: {model_name}\n"
+                response += f"📡 连接状态: 正常\n\n"
+                response += "可以使用 /web_info_test 测试完整的信息获取功能"
+
+                await self.send_text(response)
+                return True, "API连接测试成功", False
+            else:
+                web_config = plugin_instance.config.get("web_llm", {})
+                base_url = web_config.get("base_url", "")
+                api_key = web_config.get("api_key", "")
+
+                error_msg = "❌ API连接测试失败！\n\n"
+                error_msg += "可能的问题：\n"
+
+                if not base_url or base_url == "https://api.openai.com/v1":
+                    error_msg += "• ❌ API地址未正确配置\n"
+                else:
+                    error_msg += f"• 🔗 API地址: {base_url}\n"
+
+                if not api_key or api_key == "your-api-key-here":
+                    error_msg += "• ❌ API密钥未正确配置\n"
+                else:
+                    error_msg += "• 🔑 API密钥: 已配置\n"
+
+                error_msg += "• 🌐 网络连接问题\n"
+                error_msg += "• 🚫 API服务不可用\n\n"
+                error_msg += "请检查 config.toml 中的 [web_llm] 配置"
+
+                await self.send_text(error_msg)
+                return False, "API连接测试失败", False
+
+        except Exception as e:
+            logger.error(f"API连接测试失败: {e}")
+            await self.send_text(f"❌ API连接测试异常: {str(e)}")
+            return False, f"API连接测试异常: {str(e)}", False
+
+
 class WebInfoTestCommand(BaseCommand):
     """测试联网信息获取命令"""
 
@@ -950,7 +1272,25 @@ class WebInfoTestCommand(BaseCommand):
             web_info = await plugin_instance.web_llm_manager.get_web_info()
 
             if not web_info:
-                await self.send_text("❌ 未获取到联网信息，请检查配置")
+                # 提供更详细的错误信息
+                web_config = plugin_instance.config.get("web_llm", {})
+                base_url = web_config.get("base_url", "")
+
+                error_msg = "❌ 未获取到联网信息，可能的原因：\n"
+
+                if not base_url or base_url == "https://api.openai.com/v1":
+                    error_msg += "• API地址未配置或使用默认值\n"
+
+                api_key = web_config.get("api_key", "")
+                if not api_key or api_key == "your-api-key-here":
+                    error_msg += "• API密钥未配置或使用默认值\n"
+
+                error_msg += "• 网络连接问题\n"
+                error_msg += "• API服务不可用\n"
+                error_msg += "• API返回格式不被支持\n"
+                error_msg += "\n请检查 config.toml 中的 [web_llm] 配置"
+
+                await self.send_text(error_msg)
                 return False, "未获取到联网信息", False
 
             # 构建响应信息
@@ -1080,6 +1420,7 @@ class TopicFinderPlugin(BasePlugin):
             components.append((TopicTestCommand.get_command_info(), TopicTestCommand))
             components.append((TopicConfigCommand.get_command_info(), TopicConfigCommand))
             components.append((TopicDebugCommand.get_command_info(), TopicDebugCommand))
+            components.append((WebApiTestCommand.get_command_info(), WebApiTestCommand))
             components.append((WebInfoTestCommand.get_command_info(), WebInfoTestCommand))
 
         return components
