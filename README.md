@@ -112,35 +112,7 @@ recent_topics_max_items = 50
 - `data/recent_topics.json`：近 N 次发送话题（按群）
 - `logs/`：运行日志（建议忽略提交）
 
-## .gitignore 建议
-```
-__pycache__/
-logs/
-data/
-.DS_Store
-```
 
-## 推送到 GitHub（示例命令）
-注意：以下命令在仓库根目录执行；请先创建远程空仓库。
-```
-# 初始化与用户配置
-git init
-git config user.name "CharTyr"
-git config user.email "chartyr@qq.com"
-
-# 可选：只推送插件目录，或推送整个项目
-# 若只推送插件为独立仓库，可在 topic_finder_plugin/ 内 git init
-
-# 添加与提交
-git add topic_finder_plugin
-git commit -m "feat(topic-finder): public plugin with RSS+WebLLM, persona, dedupe"
-
-# 关联远程并推送
-# git remote add origin git@github.com:CharTyr/topic_finder_plugin.git
-# 或：git remote add origin https://github.com/CharTyr/topic_finder_plugin.git
-# 首次推送：
-# git branch -M main
-# git push -u origin main
 ```
 
 ## 版本
