@@ -559,6 +559,7 @@ class WebLLMManager:
         """获取缓存的联网信息"""
         try:
             if not self.cache_file.exists():
+                logger.debug("联网信息缓存文件不存在")
                 return []
 
             if not aiofiles:
@@ -571,15 +572,25 @@ class WebLLMManager:
                     content = await f.read()
                     items = json.loads(content)
 
-            # 过滤过期内容
+            # 过滤过期内容和时间戳错误的内容
             current_time = time.time()
             cache_hours = self.config.get("web_llm", {}).get("web_info_cache_hours", 2)
             max_age_seconds = cache_hours * 3600
 
-            valid_items = [
-                item for item in items
-                if current_time - item.get("timestamp", 0) < max_age_seconds
-            ]
+            valid_items = []
+            for item in items:
+                timestamp = item.get("timestamp", 0)
+
+                # 跳过时间戳错误的项（未来时间或过于久远）
+                if timestamp > current_time + 3600:  # 超过1小时的未来时间
+                    logger.warning(f"跳过错误时间戳的缓存项: {timestamp}")
+                    continue
+
+                if current_time - timestamp < max_age_seconds:
+                    valid_items.append(item)
+
+            logger.debug(f"联网信息缓存检查: 总数={len(items)}, 有效数={len(valid_items)}, "
+                        f"缓存时长={cache_hours}小时")
 
             return valid_items
 
@@ -617,6 +628,7 @@ class WebLLMManager:
         """检查是否需要更新联网信息"""
         try:
             if not self.last_update_file.exists():
+                logger.debug("联网信息更新文件不存在，需要更新")
                 return True
 
             if not aiofiles:
@@ -630,8 +642,20 @@ class WebLLMManager:
 
             last_update = data.get("last_update", 0)
             update_interval = self.config.get("web_llm", {}).get("web_info_update_interval", 60) * 60
+            current_time = time.time()
 
-            return time.time() - last_update > update_interval
+            # 防止时间戳错误导致的问题：如果last_update是未来时间，强制更新
+            if last_update > current_time + 3600:  # 超过1小时的未来时间视为错误
+                logger.warning(f"检测到错误的时间戳: {last_update}，当前时间: {current_time}，强制更新")
+                return True
+
+            time_diff = current_time - last_update
+            should_update = time_diff > update_interval
+
+            logger.debug(f"联网信息更新检查: 上次更新={last_update}, 当前时间={current_time}, "
+                        f"间隔={time_diff}s, 阈值={update_interval}s, 需要更新={should_update}")
+
+            return should_update
 
         except Exception as e:
             logger.error(f"检查联网信息更新时间失败: {e}")
